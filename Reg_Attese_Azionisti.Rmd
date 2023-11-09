@@ -1,0 +1,199 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+install.packages("readxl")
+library(readxl)
+
+df = read_excel("italy_balances.xlsx")
+names(df)
+df = df[-c(1,2,3,4)]
+
+```
+
+Una prima possibilità è concetrarci solo sugli indici di bilancio
+
+```{r}
+df2 = df[c("R.O.E. (Return on Equity)","R.O.I. Cerved (Return on Investment)","R.O.S. (Return on Sales)","ROT (Return On Turnover) FATTURATO / ATTIVO SP","R.O.A. Cerved (Return on Assets) UTILE NETTO / ATTIVO SP")] 
+
+summary(df2)
+```
+
+
+```{r}
+install.packages("plotly")
+library(plotly)
+
+plot(df2)
+
+#Analizzare un po il dataset
+plot_ly(data = df2, x=df2$`R.O.I. Cerved (Return on Investment)`, y=df2$`R.O.A. Cerved (Return on Assets) UTILE NETTO / ATTIVO SP`,  type = "scatter")
+```
+
+Splitting
+
+```{r}
+set.seed(0)
+splitting = sample(1:nrow(df2), 0.8*nrow(df2))
+train_data = df2[splitting, ]
+test_data =  df2[- splitting, ]
+```
+
+
+Prima regressione 
+```{r}
+model = lm( train_data$`R.O.I. Cerved (Return on Investment)` ~ train_data$`R.O.A. Cerved (Return on Assets) UTILE NETTO / ATTIVO SP`, data = train_data) 
+summary(model)
+```
+
+Analizziamo la regressione 
+
+```{r}
+install.packages("lmtest")
+library(lmtest)
+
+install.packages("mvinfluence")
+library(mvinfluence)
+
+library(car)
+```
+
+
+```{r}
+#1 LINEARITA' DEI DATI (Residuals vs Fitted values)
+plot(model)
+
+
+#2 INDIPENDENZA DEI RESIDUI
+#Dubrin-Watson test per vedere se gli errori sono correlati
+dwtest(formula = model,  alternative = "two.sided")
+
+#3 DISTRIBUZIONE NORMALE DEI RESIDIU
+#Lo shapiro so fa sui residui per vedere la distribuzione delgi errori
+#Da vedere insieme al normal Q-Q plot
+shapiro.test(model$residuals)
+
+#Come valutare HOMO o ETERO SCHEDASTICITA' Breusch-Pagan Test (varianza errori non costante H1)
+#Insieme allo scale-location plot
+#Insieme al residual vs fitted plot
+bptest(model) # p-value bassisimo, dobbiamo rifiutare H0, quinidi varianza non costante
+
+
+#4 ANALISI DEI VALORI ESTREMI OUTLIERS (Y) ED OSSERVAZIONI AD ALTO LEVERAGE(X)
+influencePlot(model)
+influenceIndexPlot(model)
+infIndexPlot(model)
+barplot(cooks.distance(model))
+
+#5 MULTICOLINEARITA' (non va bene quando ritorna valori superiori a 10 della variabile)
+#Variance Inflation Factor
+#vif(model)
+
+```
+
+Opterei per eliminarli perchè danno problemi anche sul Q&Q e Shapiro
+```{r}
+df2[c(284,468,478,616),]
+```
+
+
+
+
+
+Con tutti i predittori per confronto anche con NN
+
+```{r}
+model2 = lm( train_data$`R.O.I. Cerved (Return on Investment)` ~ ., data = train_data) 
+summary(model2)
+summary(model2)$sigma^2 #MSE
+plot(model2)
+influencePlot(model)
+
+```
+
+proviamo le predizioni con il test_data
+
+
+```{r}
+test = data.frame(
+  actual = test_data$`R.O.I. Cerved (Return on Investment)`,
+  preds1 = predict(model, test_data),
+  preds2 = predict(model2, test_data)
+)
+
+test
+```
+
+
+Il secondo modello è decisamente migliore a fare predizioni rispetto al primo, ma spesso si scosta parecchio
+
+
+# Modello Decision Tree
+
+```{r}
+library(ggplot2)
+library(lattice)
+library(caret)
+library(rpart)
+library(rpart.plot)
+
+model_dt = rpart(train_data$`R.O.I. Cerved (Return on Investment)` ~ ., data=train_data, cp=0.01000000)
+
+print(model_dt)
+summary(model_dt)
+print(log(model_dt$variable.importance))
+rpart.plot(model_dt)
+```
+
+```{r}
+model_dt$cptable
+```
+
+
+
+
+```{r}
+install.packages("partykit")
+library(grid)
+library(libcoin)
+library(mvtnorm)
+library(partykit)
+model_dt = as.party(model_dt)
+model_dt
+
+plot(model_dt, inner_panel = node_inner(model_dt, pval = FALSE, id = FALSE),
+  terminal_panel = node_boxplot(model_dt, id = TRUE))
+```
+
+```{r}
+newdata_dt= data.frame(ROI_test = test_data$`R.O.I. Cerved (Return on Investment)`)
+newdata_dt$ROIpred =  predict(model_dt, test_data, type="response") 
+```
+
+# Analisi predizioni con DT
+```{r}
+newdata_dt$std_err = newdata_dt$ROI_test - newdata_dt$ROIpred
+newdata_dt
+summary(newdata_dt)
+mean((newdata_dt$std_err)^2)
+plot_ly(data = newdata_dt, y=newdata_dt$std_err, x=seq(1,169), color=newdata_dt$std_err)
+```
+
+#Analisi predizioni con Regressione
+
+```{r}
+newdata_reg = data.frame(ROI_test = test_data$`R.O.I. Cerved (Return on Investment)`)
+newdata_reg$ROI_pred = predict(model2, test_data)
+
+
+newdata_reg$std_err = newdata_reg$ROI_test - newdata_reg$ROI_pred
+newdata_reg
+summary(newdata_reg)
+mean((newdata_reg$std_err)^2)
+plot_ly(data = newdata_reg, y=newdata_reg$std_err, x=seq(1,169), color=newdata_reg$std_err)
+```
+
+
+
